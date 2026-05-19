@@ -15,8 +15,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         // Cổng kết nối (Endpoint) ban đầu để Client gửi yêu cầu "bắt tay" (Handshake)
         registry.addEndpoint("/ws-chat")
-                .setAllowedOriginPatterns("*") // Cho phép tất cả các bên (Frontend/Postman) kết nối vào
-                .withSockJS(); // Hỗ trợ SockJS dự phòng nếu trình duyệt cũ không hỗ trợ WebSocket thuần
+                .setAllowedOriginPatterns("*") ;// Cho phép tất cả các bên (Frontend/Postman) kết nối vào
+
     }
 
     @Override
