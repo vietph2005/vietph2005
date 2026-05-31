@@ -4,75 +4,99 @@ import com.example.chatrealtime.entities.Message;
 import com.example.chatrealtime.entities.Room;
 import com.example.chatrealtime.repositry.MessageRepository;
 import com.example.chatrealtime.repositry.RoomRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
+import java.util.Map;
 
 @RestController
-@RequestMapping("api/v1/rooms")
+@CrossOrigin(origins = "*")
 public class RoomController {
 
-    private final RoomRepository roomRepository;
-    private final MessageRepository messageRepository;
+    @Autowired
+    private RoomRepository roomRepository;
 
-    public RoomController(RoomRepository roomRepository,
-                          MessageRepository messageRepository) {
-        this.roomRepository = roomRepository;
-        this.messageRepository = messageRepository;
-    }
+    @Autowired
+    private MessageRepository messageRepository;
 
-    // CREATE ROOM
-    @PostMapping
-    public ResponseEntity<?> createRoom(@RequestParam String roomId) {
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate; // Dùng để gửi phản hồi WebSocket công khai
 
-        if (roomRepository.findByRoomId(roomId) != null) {
-            return ResponseEntity.badRequest().body("Room already exist");
+    // =================  XỬ LÝ WEBSOCKET (STOMP) =================
+
+    // Xử lý khi nhận lệnh từ destination: /app/api/rooms/create-room (Phụ thuộc vào Prefix trong WebSocketConfig của bạn)
+    @MessageMapping("/api/rooms/create-room")
+    public void createRoomWS(@Payload Map<String, String> request) {
+        String roomId = request.get("roomId");
+        String sender = request.get("sender");
+
+        // Chuẩn bị tin nhắn phản hồi hệ thống theo đúng định dạng Frontend chờ
+        Message response = new Message();
+        response.setSender("Hệ thống");
+        response.setRoomId(roomId);
+
+        if (roomId == null || roomId.trim().isEmpty()) {
+            response.setContent("LỖI: Mã phòng không được để trống!");
+            messagingTemplate.convertAndSend("/topic/room/" + roomId, response);
+            return;
         }
 
-        Room room = new Room();
-        room.setRoomId(roomId);
+        Room existingRoom = roomRepository.findByRoomId(roomId);
+        if (existingRoom != null) {
+            response.setContent("LỖI: Phòng này đã tồn tại!");
+            messagingTemplate.convertAndSend("/topic/room/" + roomId, response);
+            return;
+        }
 
-        Room savedRoom = roomRepository.save(room);
+        // Lưu phòng mới vào DB
+        Room newRoom = new Room();
+        newRoom.setRoomId(roomId);
+        roomRepository.save(newRoom);
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(savedRoom);
+        // Thành công -> Báo về client để chuyển màn
+        response.setContent("Tạo phòng thành công!");
+        messagingTemplate.convertAndSend("/topic/room/" + roomId, response);
     }
 
-    // GET ROOM
-    @GetMapping("/{roomId}")
-    public ResponseEntity<?> joinRoom(@PathVariable String roomId) {
+    // Xử lý khi nhận lệnh từ destination: /app/api/rooms/join-room
+    @MessageMapping("/api/rooms/join-room")
+    public void joinRoomWS(@Payload Map<String, String> request) {
+        String roomId = request.get("roomId");
+
+        Message response = new Message();
+        response.setSender("Hệ thống");
+        response.setRoomId(roomId);
 
         Room room = roomRepository.findByRoomId(roomId);
-
         if (room == null) {
-            return ResponseEntity.notFound().build();
+            response.setContent("LỖI: Phòng không tồn tại!");
+            messagingTemplate.convertAndSend("/topic/room/" + roomId, response);
+            return;
         }
 
-        return ResponseEntity.ok(room);
+        // Thành công -> Báo về client để chuyển màn
+        response.setContent("Vào phòng thành công!");
+        messagingTemplate.convertAndSend("/topic/room/" + roomId, response);
     }
 
-    // GET MESSAGES (PAGINATION)
-    @GetMapping("/{roomId}/messages")
-    public ResponseEntity<List<Message>> getMessages(
+
+    // =================  XỬ LÝ HTTP REST API (GIỮ NGUYÊN) =================
+
+    @GetMapping("/api/rooms/{roomId}/messages/page")
+    public ResponseEntity<Page<Message>> getMessageHistoryPage(
             @PathVariable String roomId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
-    ) {
-
-        Room room = roomRepository.findByRoomId(roomId);
-        if (room == null) {
-            return ResponseEntity.notFound().build();
-        }
+            @RequestParam(defaultValue = "20") int size) {
 
         Pageable pageable = PageRequest.of(page, size);
-
-        Page<Message> messages =
-                messageRepository.findByRoomIdOrderByTimeStampDesc(roomId, pageable);
-
-        return ResponseEntity.ok(messages.getContent());
+        Page<Message> messagePage = messageRepository.findByRoomIdOrderByTimeStampDesc(roomId, pageable);
+        return ResponseEntity.ok(messagePage);
     }
 }
